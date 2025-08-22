@@ -4,21 +4,20 @@
 
   try {
     const res = await fetch('files.json', { cache: 'no-store' });
-    if (!res.ok) throw new Error('files.json not found');
+    if (!res.ok) throw new Error('files.json missing');
     const files = await res.json();
 
-    if (!Array.isArray(files) || files.length === 0) {
-      status.textContent = 'No images yet. Check back soon.';
+    if (!Array.isArray(files) || !files.length) {
+      status.textContent = 'No images found yet.';
       return;
     }
 
-    const html = files.map(f => {
+    gallery.innerHTML = files.map(f => {
       const url = `https://drive.google.com/uc?export=view&id=${f.id}`;
       const alt = (f.name || '').replace(/"/g, '&quot;');
       return `<figure class="item"><img loading="lazy" src="${url}" alt="${alt}"></figure>`;
     }).join('');
 
-    gallery.innerHTML = html;
     status.hidden = true;
     gallery.hidden = false;
   } catch (e) {
@@ -26,3 +25,4 @@
     status.textContent = 'Error loading gallery.';
   }
 })();
+
