@@ -1,0 +1,83 @@
+name: Sync Google Drive images
+
+on:
+  schedule:
+    - cron: "0 */4 * * *"    # every 4 hours
+  workflow_dispatch: {}
+  push:
+    paths:
+      - ".github/workflows/drive-sync.yml"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Generate files.json from Drive
+        env:
+          DRIVE_API_KEY: ${{ secrets.DRIVE_API_KEY }}
+          FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const fetch = (...args) => import('node-fetch').then(({default: f}) => f(...args));
+
+          const API_KEY = process.env.DRIVE_API_KEY;
+          const FOLDER = process.env.DRIVE_FOLDER_ID;
+          if (!API_KEY || !FOLDER) {
+            console.error('Missing DRIVE_API_KEY or DRIVE_FOLDER_ID env.');
+            process.exit(1);
+          }
+
+          const DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
+          const q = encodeURIComponent(`'${FOLDER}' in parents and mimeType contains 'image/' and trashed=false`);
+          const fields = encodeURIComponent('nextPageToken,files(id,name,createdTime)');
+
+          (async () => {
+            let pageToken = '';
+            const all = [];
+            try {
+              while (true) {
+                const url = `${DRIVE_API}?q=${q}&fields=${fields}&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}&key=${API_KEY}`;
+                const res = await fetch(url);
+                if (!res.ok) {
+                  const txt = await res.text();
+                  throw new Error(`Drive API ${res.status}: ${txt}`);
+                }
+                const data = await res.json();
+                for (const f of (data.files || [])) {
+                  all.push({ id: f.id, name: f.name || '', createdTime: f.createdTime || '' });
+                }
+                if (!data.nextPageToken) break;
+                pageToken = data.nextPageToken;
+              }
+              // Sort newest first
+              all.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+              const json = JSON.stringify(all, null, 2);
+              fs.writeFileSync('files.json', json);
+              console.log(`Wrote files.json with ${all.length} items`);
+            } catch (e) {
+              console.error(e);
+              process.exit(1);
+            }
+          })();
+          NODE
+
+      - name: Commit changes
+        run: |
+          if [[ -n "$(git status --porcelain files.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add files.json
+            git commit -m "Update files.json from Drive"
+            git push
+          else
+            echo "No changes to commit."
+          fi
